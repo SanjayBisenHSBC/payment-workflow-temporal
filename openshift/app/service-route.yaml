@@ -1,0 +1,52 @@
+---
+# openshift/app/service.yaml
+#
+# Internal ClusterIP Service — pods within the cluster talk to the app here.
+# The Route (below) exposes this Service externally.
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-workflow
+  namespace: payment-system
+  labels:
+    app: payment-workflow
+spec:
+  selector:
+    app: payment-workflow
+  ports:
+    - name: http
+      protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: ClusterIP
+
+---
+# openshift/app/route.yaml
+#
+# OpenShift Route — exposes the Service externally via the HAProxy router.
+# TLS edge termination: HTTPS is terminated at the router, HTTP inside the cluster.
+#
+# After applying, get the URL with:
+#   oc get route payment-workflow -n payment-system -o jsonpath='{.spec.host}'
+
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: payment-workflow
+  namespace: payment-system
+  labels:
+    app: payment-workflow
+spec:
+  # If you have a custom domain, set it here:
+  # host: payments.yourdomain.com
+  to:
+    kind:   Service
+    name:   payment-workflow
+    weight: 100
+  port:
+    targetPort: http
+  tls:
+    termination:              edge
+    insecureEdgeTerminationPolicy: Redirect   # HTTP → HTTPS redirect
+  wildcardPolicy: None

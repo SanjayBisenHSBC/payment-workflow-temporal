@@ -1,0 +1,191 @@
+---
+# openshift/temporal/temporal-configmap.yaml
+# Environment configuration for the Temporal server pod.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-config
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+data:
+  TEMPORAL_ADDRESS:           "payment-temporal:7233"
+  DB:                         "postgresql"
+  DB_PORT:                    "5432"
+  POSTGRES_SEEDS:             "payment-postgres"
+  DYNAMIC_CONFIG_FILE_PATH:   "config/dynamicconfig/production.yaml"
+
+---
+# openshift/temporal/temporal-dynamicconfig.yaml
+# Temporal dynamic config mounted as a ConfigMap volume.
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: temporal-dynamicconfig
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+data:
+  production.yaml: |
+    limit.maxIDLength:
+      - value: 255
+        constraints: {}
+    system.forceSearchAttributesCacheRefreshOnRead:
+      - value: true
+        constraints: {}
+    frontend.rps:
+      - value: 2400
+        constraints: {}
+    history.rps:
+      - value: 3000
+        constraints: {}
+
+---
+# openshift/temporal/temporal-pvc.yaml
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: temporal-pvc
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+  # storageClassName: your-storage-class
+
+---
+# openshift/temporal/temporal-deployment.yaml
+#
+# Temporal Server — the workflow engine.
+# Uses temporalio/auto-setup which bundles all Temporal services
+# (frontend, history, matching, worker) into a single process.
+#
+# NOTE: For production, use the Temporal Helm chart which deploys each
+# service separately for independent scaling:
+# https://github.com/temporalio/helm-charts
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-temporal
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-temporal
+  template:
+    metadata:
+      labels:
+        app: payment-temporal
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z payment-postgres 5432; do
+                echo "Waiting for PostgreSQL..."; sleep 3
+              done
+              echo "PostgreSQL is ready."
+      containers:
+        - name: temporal
+          image: temporalio/auto-setup:1.22.3
+          ports:
+            - name: grpc
+              containerPort: 7233
+            - name: ui
+              containerPort: 8233
+          envFrom:
+            - configMapRef:
+                name: temporal-config
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_USER
+            - name: POSTGRES_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: postgres-secret
+                  key: POSTGRES_PASSWORD
+          resources:
+            requests:
+              cpu:    "500m"
+              memory: "512Mi"
+            limits:
+              cpu:    "2000m"
+              memory: "2Gi"
+          volumeMounts:
+            - name: dynamicconfig
+              mountPath: /etc/temporal/config/dynamicconfig
+          livenessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 60
+            periodSeconds:       20
+          readinessProbe:
+            tcpSocket:
+              port: 7233
+            initialDelaySeconds: 30
+            periodSeconds:       10
+      volumes:
+        - name: dynamicconfig
+          configMap:
+            name: temporal-dynamicconfig
+
+---
+# Service — exposes Temporal gRPC (7233) and UI (8233) inside cluster
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-temporal
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+spec:
+  selector:
+    app: payment-temporal
+  ports:
+    - name: grpc
+      port: 7233
+      targetPort: 7233
+    - name: ui
+      port: 8233
+      targetPort: 8233
+  type: ClusterIP
+
+---
+# Route — exposes Temporal Web UI externally for monitoring
+
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: temporal-ui
+  namespace: payment-system
+  labels:
+    app: payment-temporal
+spec:
+  to:
+    kind:   Service
+    name:   payment-temporal
+  port:
+    targetPort: ui
+  tls:
+    termination:                     edge
+    insecureEdgeTerminationPolicy:   Redirect

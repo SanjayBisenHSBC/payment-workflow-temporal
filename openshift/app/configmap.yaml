@@ -1,0 +1,40 @@
+---
+# openshift/app/configmap.yaml
+#
+# Non-sensitive configuration injected as environment variables into the pod.
+# Sensitive values (passwords) come from the Secret, not here.
+#
+# To apply:
+#   oc apply -f openshift/app/configmap.yaml -n payment-system
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: payment-workflow-config
+  namespace: payment-system
+  labels:
+    app: payment-workflow
+data:
+  # ── Spring Boot ──────────────────────────────────────────────────────────
+  SPRING_PROFILES_ACTIVE:     "openshift"
+  SERVER_PORT:                "8080"
+
+  # ── Temporal ─────────────────────────────────────────────────────────────
+  # Service name of the Temporal server pod in the same namespace
+  APP_TEMPORAL_TARGET:        "payment-temporal:7233"
+  APP_TEMPORAL_NAMESPACE:     "default"
+  APP_TEMPORAL_TASK_QUEUE:    "payment-task-queue"
+
+  # ── Kafka ─────────────────────────────────────────────────────────────────
+  # Internal service DNS of the Kafka broker (Strimzi / AMQ Streams)
+  # Format: <kafka-cluster-name>-kafka-bootstrap.<namespace>.svc:9092
+  SPRING_KAFKA_BOOTSTRAP_SERVERS: "payment-kafka-bootstrap:9092"
+
+  # ── Topic names ────────────────────────────────────────────────────────────
+  APP_KAFKA_TOPICS_FRAUD_REQUEST:  "payment.fraud.request"
+  APP_KAFKA_TOPICS_FRAUD_RESPONSE: "payment.fraud.response"
+  APP_KAFKA_TOPICS_PAYMENT_EVENTS: "payment.events"
+  APP_KAFKA_CONSUMER_FRAUD_RESPONSE_TIMEOUT_SECONDS: "30"
+
+  # ── Actuator ──────────────────────────────────────────────────────────────
+  MANAGEMENT_ENDPOINTS_WEB_EXPOSURE_INCLUDE: "health,info,metrics,flyway"

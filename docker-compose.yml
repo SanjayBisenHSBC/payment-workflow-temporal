@@ -1,0 +1,132 @@
+version: '3.8'
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Payment Workflow Service — Local Development Stack
+#
+# Services:
+#   postgres        PostgreSQL 15 — application database
+#   zookeeper       Zookeeper — required by Kafka
+#   kafka           Apache Kafka 3.x — message broker
+#   kafka-ui        Kafka UI (optional) — browser-based Kafka management
+#   temporal        Temporal Server — workflow engine
+#   temporal-admin  One-shot container to create Temporal namespace
+#
+# Usage:
+#   Start all:      docker-compose up -d
+#   Stop all:       docker-compose down
+#   Wipe volumes:   docker-compose down -v
+#
+# After startup:
+#   App (Spring Boot):  http://localhost:8080
+#   Swagger UI:         http://localhost:8080/swagger-ui.html
+#   Temporal UI:        http://localhost:8233
+#   Kafka UI:           http://localhost:9090
+#   Postgres:           localhost:5432  (user: payment_user  pass: payment_pass  db: paymentdb)
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── PostgreSQL ──────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:15-alpine
+    container_name: payment-postgres
+    environment:
+      POSTGRES_DB:       paymentdb
+      POSTGRES_USER:     payment_user
+      POSTGRES_PASSWORD: payment_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U payment_user -d paymentdb"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - payment-network
+
+  # ── Zookeeper (required by Kafka) ───────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: payment-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
+    ports:
+      - "2181:2181"
+    networks:
+      - payment-network
+
+  # ── Kafka ───────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: payment-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"      # External (Spring Boot connects here)
+      - "29092:29092"    # Internal Docker network
+    environment:
+      KAFKA_BROKER_ID:                        1
+      KAFKA_ZOOKEEPER_CONNECT:                zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP:   PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS:             PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:        "true"
+      KAFKA_DEFAULT_REPLICATION_FACTOR:       1
+      KAFKA_NUM_PARTITIONS:                   3
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+    networks:
+      - payment-network
+
+  # ── Kafka UI ────────────────────────────────────────────────────────────────
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: payment-kafka-ui
+    depends_on:
+      - kafka
+    ports:
+      - "9090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME:            local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+    networks:
+      - payment-network
+
+  # ── Temporal Server ─────────────────────────────────────────────────────────
+  # Uses the all-in-one image which bundles the server + UI + Cassandra
+  temporal:
+    image: temporalio/auto-setup:1.22.3
+    container_name: payment-temporal
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "7233:7233"   # gRPC API (used by SDK)
+      - "8233:8233"   # Web UI
+    environment:
+      - DB=postgresql
+      - DB_PORT=5432
+      - POSTGRES_USER=payment_user
+      - POSTGRES_PWD=payment_pass
+      - POSTGRES_SEEDS=postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+    volumes:
+      - ./docker/temporal/dynamicconfig:/etc/temporal/config/dynamicconfig
+    networks:
+      - payment-network
+
+# ── Volumes ───────────────────────────────────────────────────────────────────
+volumes:
+  postgres-data:
+    driver: local
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  payment-network:
+    driver: bridge

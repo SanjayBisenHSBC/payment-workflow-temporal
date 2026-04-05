@@ -1,0 +1,51 @@
+---
+# openshift/app/hpa.yaml
+#
+# Horizontal Pod Autoscaler — automatically scales the Deployment
+# based on CPU utilisation.
+#
+# Scale-out: when average CPU across all pods > 70%  → add pods (up to 10)
+# Scale-in:  when average CPU < 70% for stabilizationWindowSeconds → remove pods
+#
+# For payment workloads, also consider scaling on custom metrics such as:
+#   - Temporal task queue backlog depth (via temporal-metrics + Prometheus)
+#   - Kafka consumer lag on payment.fraud.request
+
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: payment-workflow-hpa
+  namespace: payment-system
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: payment-workflow
+  minReplicas: 2
+  maxReplicas: 10
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type:               AverageUtilization
+          averageUtilization: 70
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type:               AverageUtilization
+          averageUtilization: 80
+  behavior:
+    scaleDown:
+      stabilizationWindowSeconds: 300   # Wait 5 minutes before scaling down
+      policies:
+        - type:          Pods
+          value:         1
+          periodSeconds: 60             # Remove at most 1 pod per minute
+    scaleUp:
+      stabilizationWindowSeconds: 60
+      policies:
+        - type:          Pods
+          value:         2
+          periodSeconds: 60             # Add at most 2 pods per minute

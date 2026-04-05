@@ -1,0 +1,113 @@
+server:
+  port: 8080
+
+spring:
+  application:
+    name: payment-workflow-service
+
+  # ─── PostgreSQL DataSource ─────────────────────────────────────────────────
+  # Local dev: run `docker-compose up -d postgres` (see docker-compose.yml)
+  # OpenShift:  override via environment variables injected from a Secret:
+  #             SPRING_DATASOURCE_URL, SPRING_DATASOURCE_USERNAME,
+  #             SPRING_DATASOURCE_PASSWORD
+  datasource:
+    url: jdbc:postgresql://localhost:5432/paymentdb
+    username: payment_user
+    password: payment_pass
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: PaymentHikariPool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 30000
+      idle-timeout: 600000
+      max-lifetime: 1800000
+
+  # ─── JPA / Hibernate ──────────────────────────────────────────────────────
+  jpa:
+    hibernate:
+      ddl-auto: validate          # Flyway owns the schema; Hibernate only validates
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        jdbc:
+          time_zone: UTC
+
+  # ─── Flyway Schema Migrations ─────────────────────────────────────────────
+  # SQL files in src/main/resources/db/migration are applied in version order.
+  # Naming: V{version}__{description}.sql  e.g. V1__create_payment_tables.sql
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  # ─── Kafka ────────────────────────────────────────────────────────────────
+  # Local dev: run `docker-compose up -d kafka` (see docker-compose.yml)
+  # OpenShift:  override via environment variables injected from a ConfigMap/Secret:
+  #             SPRING_KAFKA_BOOTSTRAP_SERVERS
+  kafka:
+    bootstrap-servers: localhost:9092
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all                   # Wait for all ISR replicas to acknowledge
+      retries: 3
+      properties:
+        enable.idempotence: true  # Exactly-once producer semantics
+        max.in.flight.requests.per.connection: 1
+        spring.json.add.type.headers: false
+    consumer:
+      group-id: payment-workflow-service
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      auto-offset-reset: earliest
+      enable-auto-commit: false   # Manual ack — we commit only after DB write
+      properties:
+        spring.json.trusted.packages: "com.payment.workflow.kafka.model"
+        spring.json.use.type.headers: false
+        spring.json.value.default.type: com.payment.workflow.kafka.model.FraudCheckResponse
+
+# ─── Temporal Connection ──────────────────────────────────────────────────────
+app:
+  temporal:
+    target: 127.0.0.1:7233
+    namespace: default
+    task-queue: payment-task-queue
+
+  # ─── Kafka Topic Names ──────────────────────────────────────────────────────
+  kafka:
+    topics:
+      fraud-request: payment.fraud.request      # We publish to this topic
+      fraud-response: payment.fraud.response    # We consume from this topic
+      payment-events: payment.events            # Audit/notification events
+    consumer:
+      fraud-response-timeout-seconds: 30        # Max wait for fraud response
+
+# ─── Actuator ─────────────────────────────────────────────────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics,flyway
+  endpoint:
+    health:
+      show-details: always
+
+# ─── Swagger / OpenAPI ────────────────────────────────────────────────────────
+springdoc:
+  api-docs:
+    path: /api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+    operationsSorter: method
+
+# ─── Logging ──────────────────────────────────────────────────────────────────
+logging:
+  level:
+    com.payment: DEBUG
+    io.temporal: INFO
+    org.apache.kafka: WARN
+    org.springframework.kafka: INFO
+    org.flywaydb: INFO

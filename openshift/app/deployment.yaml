@@ -1,0 +1,160 @@
+---
+# openshift/app/deployment.yaml
+#
+# Deploys the payment-workflow-service (Spring Boot + Temporal Worker).
+# This single Deployment runs BOTH the REST API and the Temporal Worker
+# in the same process — they share the same JVM.
+#
+# Scaling: increase replicas for more worker throughput.
+# Each replica polls the same Temporal task queue independently.
+# Temporal distributes tasks across all polling workers automatically.
+#
+# To apply:
+#   oc apply -f openshift/app/deployment.yaml -n payment-system
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: payment-workflow
+  namespace: payment-system
+  labels:
+    app: payment-workflow
+    version: "1.0.0"
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: payment-workflow
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge:       1
+  template:
+    metadata:
+      labels:
+        app: payment-workflow
+        version: "1.0.0"
+      annotations:
+        # Forces pod restart when ConfigMap changes (useful for config updates)
+        checksum/config: "{{ .Values.configChecksum }}"
+    spec:
+      # ── Security Context ───────────────────────────────────────────────
+      # OpenShift default SCCs deny running as root.
+      # runAsNonRoot=true enforces this explicitly.
+      securityContext:
+        runAsNonRoot: true
+
+      # ── Init Container ─────────────────────────────────────────────────
+      # Waits for PostgreSQL to be ready before the app starts.
+      # Prevents the app from crashing on startup if DB isn't available yet.
+      initContainers:
+        - name: wait-for-postgres
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - |
+              until nc -z payment-postgres 5432; do
+                echo "Waiting for PostgreSQL..."
+                sleep 3
+              done
+              echo "PostgreSQL is ready."
+
+      containers:
+        - name: payment-workflow
+          # Replace with your internal OpenShift registry path:
+          # image: image-registry.openshift-image-registry.svc:5000/payment-system/payment-workflow:1.0.0
+          image: payment-workflow:1.0.0
+          imagePullPolicy: Always
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+
+          # ── Environment Variables ──────────────────────────────────────
+          # Non-sensitive values from ConfigMap
+          envFrom:
+            - configMapRef:
+                name: payment-workflow-config
+
+          # Sensitive values from Secret (overrides any ConfigMap values)
+          env:
+            - name: SPRING_DATASOURCE_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: payment-workflow-secrets
+                  key: DB_USERNAME
+            - name: SPRING_DATASOURCE_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: payment-workflow-secrets
+                  key: DB_PASSWORD
+            - name: SPRING_DATASOURCE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: payment-workflow-secrets
+                  key: DB_URL
+
+          # ── Resource Limits ────────────────────────────────────────────
+          # requests: guaranteed resources the pod always gets
+          # limits:   maximum the pod can use before being OOM-killed
+          resources:
+            requests:
+              cpu:    "500m"       # 0.5 vCPU
+              memory: "512Mi"
+            limits:
+              cpu:    "2000m"      # 2 vCPU burst
+              memory: "1Gi"
+
+          # ── Probes ─────────────────────────────────────────────────────
+          # startupProbe: gives the app time to start (runs Flyway migrations)
+          # livenessProbe: restart the pod if the app becomes unresponsive
+          # readinessProbe: only route traffic when the app is truly ready
+          startupProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds:       10
+            failureThreshold:    12    # 12 * 10s = 2 minutes max startup time
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds:       15
+            failureThreshold:    3
+            timeoutSeconds:      5
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8080
+            initialDelaySeconds: 0
+            periodSeconds:       10
+            failureThreshold:    3
+            timeoutSeconds:      5
+
+          # ── Volume Mounts ──────────────────────────────────────────────
+          volumeMounts:
+            - name: tmp-dir
+              mountPath: /tmp
+
+      volumes:
+        # Writable /tmp for the JVM (read-only root filesystem best practice)
+        - name: tmp-dir
+          emptyDir: {}
+
+      # ── Pod Anti-Affinity ──────────────────────────────────────────────
+      # Spread replicas across different nodes to survive node failures
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values: ["payment-workflow"]
+                topologyKey: "kubernetes.io/hostname"

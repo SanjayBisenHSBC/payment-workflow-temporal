@@ -1,0 +1,48 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Test profile — overrides application.yml for unit/integration tests.
+#
+# - H2 in-memory DB replaces PostgreSQL (no external DB needed)
+# - Flyway uses H2-compatible SQL dialect
+# - Kafka bootstrap overridden to embedded broker (injected by @EmbeddedKafka)
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    username: sa
+    password:
+    driver-class-name: org.h2.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: create-drop    # H2: let Hibernate manage schema (Flyway skipped)
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.H2Dialect
+
+  flyway:
+    enabled: false             # Disabled for tests — H2 uses ddl-auto instead
+
+  kafka:
+    bootstrap-servers: ${spring.embedded.kafka.brokers}
+    consumer:
+      auto-offset-reset: earliest
+      group-id: payment-test-group
+
+app:
+  temporal:
+    target: 127.0.0.1:7233
+    namespace: default
+    task-queue: payment-task-queue
+  kafka:
+    topics:
+      fraud-request:   payment.fraud.request.test
+      fraud-response:  payment.fraud.response.test
+      payment-events:  payment.events.test
+    consumer:
+      fraud-response-timeout-seconds: 5
+
+logging:
+  level:
+    com.payment: DEBUG
+    org.springframework.kafka: WARN

@@ -1,0 +1,123 @@
+---
+# openshift/postgres/postgres-secret.yaml
+#
+# Credentials for the PostgreSQL instance deployed inside OpenShift.
+# In production, use an external managed PostgreSQL (AWS RDS, Azure Database,
+# or your on-prem PostgreSQL cluster) instead of deploying inside OpenShift.
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: postgres-secret
+  namespace: payment-system
+  labels:
+    app: payment-postgres
+type: Opaque
+stringData:
+  # Plain text here — Kubernetes will base64-encode on apply
+  POSTGRES_DB:       paymentdb
+  POSTGRES_USER:     payment_user
+  POSTGRES_PASSWORD: payment_pass
+
+---
+# openshift/postgres/postgres-pvc.yaml
+#
+# PersistentVolumeClaim — requests durable storage from OpenShift's
+# storage provider (NFS, Ceph, vSphere, etc.)
+
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-pvc
+  namespace: payment-system
+  labels:
+    app: payment-postgres
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 20Gi
+  # Set storageClassName to your OpenShift cluster's storage class:
+  # storageClassName: managed-premium    # Azure
+  # storageClassName: gp2                # AWS
+  # storageClassName: thin               # vSphere
+  # storageClassName: ocs-storagecluster-ceph-rbd  # OCS/Ceph
+
+---
+# openshift/postgres/statefulset.yaml
+#
+# StatefulSet provides stable network identity and persistent storage
+# for the PostgreSQL pod. StatefulSet is preferred over Deployment for
+# databases because pods get a predictable name (postgres-0, postgres-1).
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: payment-postgres
+  namespace: payment-system
+  labels:
+    app: payment-postgres
+spec:
+  serviceName: payment-postgres
+  replicas: 1
+  selector:
+    matchLabels:
+      app: payment-postgres
+  template:
+    metadata:
+      labels:
+        app: payment-postgres
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        fsGroup: 999         # postgres group in the official image
+      containers:
+        - name: postgres
+          image: postgres:15-alpine
+          ports:
+            - containerPort: 5432
+          envFrom:
+            - secretRef:
+                name: postgres-secret
+          resources:
+            requests:
+              cpu:    "250m"
+              memory: "256Mi"
+            limits:
+              cpu:    "1000m"
+              memory: "1Gi"
+          volumeMounts:
+            - name: postgres-data
+              mountPath: /var/lib/postgresql/data
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "payment_user", "-d", "paymentdb"]
+            initialDelaySeconds: 30
+            periodSeconds:       10
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "payment_user", "-d", "paymentdb"]
+            initialDelaySeconds: 5
+            periodSeconds:       5
+      volumes:
+        - name: postgres-data
+          persistentVolumeClaim:
+            claimName: postgres-pvc
+
+---
+# Service — exposes PostgreSQL inside the cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: payment-postgres
+  namespace: payment-system
+  labels:
+    app: payment-postgres
+spec:
+  selector:
+    app: payment-postgres
+  ports:
+    - port: 5432
+      targetPort: 5432
+  clusterIP: None   # Headless service — required for StatefulSet DNS

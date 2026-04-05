@@ -1,0 +1,54 @@
+---
+# openshift/namespace-rbac.yaml
+#
+# Creates the payment-system namespace and the minimum RBAC permissions
+# needed for the application pods.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: payment-system
+  labels:
+    name: payment-system
+    environment: production
+
+---
+# ServiceAccount — pods run as this identity (not the default SA)
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: payment-workflow-sa
+  namespace: payment-system
+  labels:
+    app: payment-workflow
+
+---
+# Role — minimum permissions needed at runtime
+# (reading ConfigMaps/Secrets for dynamic reload, if needed)
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: payment-workflow-role
+  namespace: payment-system
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs:     ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs:     ["get", "list"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: payment-workflow-rolebinding
+  namespace: payment-system
+subjects:
+  - kind:      ServiceAccount
+    name:      payment-workflow-sa
+    namespace: payment-system
+roleRef:
+  kind:     Role
+  name:     payment-workflow-role
+  apiGroup: rbac.authorization.k8s.io
