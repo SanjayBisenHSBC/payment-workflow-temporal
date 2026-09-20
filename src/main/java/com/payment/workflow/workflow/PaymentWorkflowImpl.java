@@ -1,6 +1,10 @@
 package com.payment.workflow.workflow;
 
 import com.payment.workflow.activities.*;
+import com.payment.workflow.decision.FraudDecision;
+import com.payment.workflow.decision.PaymentContextMerger;
+import com.payment.workflow.decision.PaymentDecisionEngine;
+import com.payment.workflow.decision.RouteType;
 import com.payment.workflow.model.*;
 import io.temporal.activity.ActivityOptions;
 import io.temporal.common.RetryOptions;
@@ -31,7 +35,16 @@ import java.util.List;
  *
  * 3. ACTIVITIES are the ONLY place to do I/O (HTTP, DB, file, etc.)
  *
- * 4. Workflow code should be simple orchestration logic only.
+ * 4. DECISIONS AND DATA MERGING ARE NOT I/O, but they're split into
+ *    two distinct responsibilities, each with its own class:
+ *      - PaymentDecisionEngine: "what should happen next?" — branching
+ *        only. Never mutates PaymentContext.
+ *      - PaymentContextMerger: "reconcile this response into state" —
+ *        called after every exit point. Never branches on business
+ *        rules; it only takes decision outputs as plain parameters
+ *        when it needs them (see mergeForAccounting).
+ *    Both are plain objects (not ActivityStubs), pure, and therefore
+ *    safe to call directly from workflow code.
  *
  * ─────────────────────────────────────────────────────────────────
  * HOW TEMPORAL HANDLES FAILURES
@@ -88,6 +101,16 @@ public class PaymentWorkflowImpl implements PaymentWorkflow {
             Duration.ofSeconds(2)
         ));
 
+    // NEW — only invoked conditionally for cross-border routes.
+    private final ComplianceReportingActivity complianceReportingActivity =
+        Workflow.newActivityStub(ComplianceReportingActivity.class, buildActivityOptions(
+            Duration.ofSeconds(60), 3, Duration.ofSeconds(2)
+        ));
+
+    // ─── Decisions vs. Merging — two separate, single-purpose helpers ───
+    private final PaymentDecisionEngine decisionEngine = new PaymentDecisionEngine();
+    private final PaymentContextMerger contextMerger = new PaymentContextMerger();
+
     // ─── Workflow State ──────────────────────────────────────────────────
     // This field persists across replays because Temporal serializes it
     private PaymentContext context;
@@ -107,58 +130,88 @@ public class PaymentWorkflowImpl implements PaymentWorkflow {
             .build();
 
         // ── EXIT POINT 1: Payment Initiation ──────────────────────────
-        // Assigns a unique payment ID, timestamps, and initial references.
-        // This is the "booking" step.
-        context = initiationActivity.initiatePayment(context);
+        PaymentContext initiationResult = initiationActivity.initiatePayment(context);
+        context = contextMerger.mergeInitiationResult(context, initiationResult);
 
         if (context.getCurrentStatus() == PaymentStatus.FAILED) {
             return buildResult(context);
         }
 
         // ── EXIT POINT 2: Payment Validation & Derivations ────────────
-        // Validates business rules (account exists, sufficient funds,
-        // currency supported). Derives routing, FX rate, value date,
-        // correspondent bank, and charge bearer.
-        context = validationActivity.validateAndDerive(context);
+        PaymentContext validationResult = validationActivity.validateAndDerive(context);
+        context = contextMerger.mergeValidationResult(context, validationResult);
 
         if (!context.isValidationPassed()) {
             context.setCurrentStatus(PaymentStatus.FAILED);
             return buildResult(context);
         }
 
-        // ── EXIT POINT 3: Fraud Check ─────────────────────────────────
-        // Runs AML/fraud screening. Assigns risk score.
-        // If HIGH risk → blocks payment. If MEDIUM → flags for review
-        // but still proceeds (configurable).
-        context = fraudCheckActivity.performFraudCheck(context);
+        // ── DECISION POINT: Route classification (decision engine only) ──
+        RouteType route = decisionEngine.classifyRoute(context);
+        context.setRouteType(route);
 
-        if (!context.isFraudCheckPassed()) {
-            context.setCurrentStatus(PaymentStatus.FRAUD_BLOCKED);
-            return buildResult(context);
+        // ── EXIT POINT 3: Fraud Check ─────────────────────────────────
+        PaymentContext fraudResult = fraudCheckActivity.performFraudCheck(context);
+        context = contextMerger.mergeFraudCheckResult(context, fraudResult);
+
+        // ── DECISION POINT: Multi-way fraud branching (decision engine only) ──
+        FraudDecision fraudDecision = decisionEngine.evaluateFraudRisk(context, route);
+
+        switch (fraudDecision) {
+            case BLOCK:
+                context.setCurrentStatus(PaymentStatus.FRAUD_BLOCKED);
+                return buildResult(context);
+
+            case MANUAL_REVIEW:
+                context.setCurrentStatus(PaymentStatus.PENDING_REVIEW);
+                Workflow.await(() -> context.isReviewDecisionReceived());
+                if (!context.isReviewApproved()) {
+                    context.setCurrentStatus(PaymentStatus.FRAUD_BLOCKED);
+                    return buildResult(context);
+                }
+                break;
+
+            case PROCEED:
+            default:
+                break;
         }
 
+        // ── MERGE: fold decisions into the fields accounting needs ───────
+        context = contextMerger.mergeForAccounting(context, route, fraudDecision);
+
         // ── EXIT POINT 4: Accounting ──────────────────────────────────
-        // Posts debit entry on source account and credit entry on
-        // destination account. Creates ledger references.
-        context = accountingActivity.postAccounting(context);
+        PaymentContext accountingResult = accountingActivity.postAccounting(context);
+        context = contextMerger.mergeAccountingResult(context, accountingResult);
 
         if (!context.isAccountingPosted()) {
             context.setCurrentStatus(PaymentStatus.FAILED);
             return buildResult(context);
         }
 
-        // ── EXIT POINT 5: Payment Completion & Notifications ─────────
-        // Marks payment as completed. Sends notifications to sender
-        // and receiver (email/SMS/webhook).
-        context = completionActivity.completeAndNotify(context);
+        // ── DECISION POINT: conditional activity based on route ────────
+        if (route == RouteType.CROSS_BORDER) {
+            PaymentContext complianceResult = complianceReportingActivity.fileCrossBorderReport(context);
+            context = contextMerger.mergeComplianceResult(context, complianceResult);
+        }
+
+        // ── EXIT POINT 5: Payment Completion & Notifications ───────────
+        PaymentContext completionResult = completionActivity.completeAndNotify(context);
+        context = contextMerger.mergeCompletionResult(context, completionResult);
 
         return buildResult(context);
     }
 
     /**
-     * Query handler — returns the live context.
-     * Temporal calls this on the worker holding the workflow execution.
+     * Signal handler — an external system (e.g. a compliance review UI)
+     * calls this to unblock a workflow parked in MANUAL_REVIEW.
+     * Declare this as @SignalMethod on the PaymentWorkflow interface.
      */
+    @Override
+    public void submitReviewDecision(boolean approved) {
+        context.setReviewDecisionReceived(true);
+        context.setReviewApproved(approved);
+    }
+
     @Override
     public PaymentContext getCurrentStatus() {
         return context;

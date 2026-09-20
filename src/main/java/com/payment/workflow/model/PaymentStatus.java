@@ -31,5 +31,7 @@ public enum PaymentStatus {
     FRAUD_BLOCKED,
 
     /** Payment failed at any stage */
-    FAILED
+    FAILED,
+
+    PENDING_REVIEW
 }

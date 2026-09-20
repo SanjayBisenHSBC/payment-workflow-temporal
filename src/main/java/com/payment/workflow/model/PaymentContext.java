@@ -1,5 +1,6 @@
 package com.payment.workflow.model;
 
+import com.payment.workflow.decision.RouteType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -78,4 +79,11 @@ public class PaymentContext {
         }
         this.auditTrail.add(step);
     }
+
+    //Additionally added
+    boolean reviewDecisionReceived;
+    boolean reviewApproved;
+    RouteType routeType;
+    String SettlementAccountId;
+    int riskScore;
 }

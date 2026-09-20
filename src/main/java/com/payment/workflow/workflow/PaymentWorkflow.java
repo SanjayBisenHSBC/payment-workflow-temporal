@@ -4,6 +4,7 @@ import com.payment.workflow.model.PaymentContext;
 import com.payment.workflow.model.PaymentRequest;
 import com.payment.workflow.model.PaymentResult;
 import io.temporal.workflow.QueryMethod;
+import io.temporal.workflow.SignalMethod;
 import io.temporal.workflow.WorkflowInterface;
 import io.temporal.workflow.WorkflowMethod;
 
@@ -63,4 +64,8 @@ public interface PaymentWorkflow {
      */
     @QueryMethod
     PaymentContext getCurrentStatus();
-}
+
+    @SignalMethod
+    void submitReviewDecision(boolean approved);
+
+    }
