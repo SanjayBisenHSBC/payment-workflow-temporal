@@ -201,7 +201,7 @@ public class FraudCheckActivityImpl implements FraudCheckActivity {
         String riskLevel = score >= 70 ? "HIGH" : score >= 30 ? "MEDIUM" : "LOW";
         boolean passed = score < 70;
         boolean manualReview = score >= 30;
-        String details = String.format("Internal rules (fallback). Score=%d/100, Level=%s, Factors=[%s]",
+        String details = String.format("{\"Internal rules (fallback). Score\":%d, \"Level\":\"%s\", \"Factors\":\"%s\"}",
             score, riskLevel, factors.isEmpty() ? "NONE" : String.join(", ", factors));
 
         setFraudResult(context, passed, riskLevel, details, manualReview);

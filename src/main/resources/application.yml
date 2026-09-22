@@ -12,8 +12,8 @@ spring:
   #             SPRING_DATASOURCE_PASSWORD
   datasource:
     url: jdbc:postgresql://localhost:5432/paymentdb
-    username: payment_user
-    password: payment_pass
+    username: postgres
+    password:
     driver-class-name: org.postgresql.Driver
     hikari:
       pool-name: PaymentHikariPool
@@ -83,7 +83,7 @@ app:
       fraud-response: payment.fraud.response    # We consume from this topic
       payment-events: payment.events            # Audit/notification events
     consumer:
-      fraud-response-timeout-seconds: 30        # Max wait for fraud response
+      fraud-response-timeout-seconds: 5        # Max wait for fraud response
 
 # ─── Actuator ─────────────────────────────────────────────────────────────────
 management:

@@ -657,4 +657,23 @@ oc logs -l app=payment-workflow -n payment-system -f
 
 # Delete everything (careful!)
 oc delete namespace payment-system
+
+
+###Sanjay ### Docker Commands to Run on Local Terminal
+## 1. Start the Temporal Server Locally
+temporal server start-dev
+
+## 2. Start the PostGre DB
+#Just Open PostGres Application
+
+## 3. Start local Kafka Docker
+## To Kill Running Docker with name brokers
+docker rm -f broker  
+##To Run docker image apache/kafka with external port mapping with Internal port
+docker run -d -p 9092:9092 --name broker apache/kafka:latest
+
+##Docker commands
+docker run -d --name broker apache/kafka:latest # To run the docker
+docker exec --workdir /opt/kafka/bin/ -it broker sh #To Enter inside Docker
+./kafka-topics.sh --bootstrap-server localhost:9092 --create --topic test-topic #To create a topic in kafka broker
 ```

@@ -36,7 +36,7 @@ public class PaymentValidationActivityImpl implements PaymentValidationActivity 
     private static final Set<String> SUPPORTED_CURRENCIES = Set.of(
         "USD", "EUR", "GBP", "SGD", "JPY", "CHF", "AUD", "CAD", "HKD", "CNY");
     private static final Set<String> SUPPORTED_PAYMENT_TYPES = Set.of(
-        "WIRE", "ACH", "SEPA", "SWIFT", "INTERNAL");
+        "WIRE", "ACH", "SEPA", "SWIFT", "INTERNAL", "RTGS");
     private static final BigDecimal MAX_AMOUNT = new BigDecimal("10000000.00");
     private static final BigDecimal MIN_AMOUNT = new BigDecimal("0.01");
 
@@ -101,7 +101,7 @@ public class PaymentValidationActivityImpl implements PaymentValidationActivity 
             context.setCurrentStatus(PaymentStatus.VALIDATED);
 
             String derivedSummary = String.format(
-                "Route=%s, FX=%s, ValueDate=%s, ChargeBearer=%s",
+                    "{\"Route\":\"%s\",\"FX\":\"%s\",\"ValueDate\":\"%s\",\"ChargeBearer\":\"%s\"}",
                 route, fxRate, context.getValueDate(), context.getChargeBearer());
 
             context.addAuditStep(WorkflowStep.builder()

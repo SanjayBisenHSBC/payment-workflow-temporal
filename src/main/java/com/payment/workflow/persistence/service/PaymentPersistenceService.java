@@ -12,6 +12,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 import java.util.Optional;
 
@@ -99,7 +100,7 @@ public class PaymentPersistenceService {
             record.setConvertedAmount(ctx.getConvertedAmount());
             record.setSettlementCurrency(ctx.getSettlementCurrency());
             record.setChargeBearer(ctx.getChargeBearer());
-            record.setValueDate(ctx.getValueDate());
+            record.setValueDate(LocalDate.parse(ctx.getValueDate()));
             record.setValidatedAt(OffsetDateTime.now());
             if (!ctx.isValidationPassed()) record.setFailureReason(ctx.getValidationErrors());
             paymentRecordRepository.save(record);

@@ -6,6 +6,7 @@ import org.hibernate.annotations.JdbcTypeCode;
 import org.hibernate.type.SqlTypes;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.OffsetDateTime;
 
 /**
@@ -32,8 +33,8 @@ public class PaymentRecord {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @Version
-    private Long version;           // Optimistic locking
+//    @Version
+//    private Long version;           // Optimistic locking
 
     @Column(name = "payment_id", nullable = false, unique = true, length = 64)
     private String paymentId;
@@ -89,7 +90,7 @@ public class PaymentRecord {
     private String chargeBearer;
 
     @Column(name = "value_date")
-    private String valueDate;
+    private LocalDate valueDate;
 
     // ── Fraud fields ────────────────────────────────────────────────────
     @Column(name = "fraud_risk_score", length = 10)
